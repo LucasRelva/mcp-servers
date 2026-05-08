@@ -17,6 +17,27 @@ It drives the Notes app via JXA (JavaScript for Automation, Apple's official scr
 | `update_note` | Replace a note's body (optionally rename). |
 | `delete_note` | Delete a note. Requires `confirm=True`. |
 
+## Resources
+
+The server exposes formatting documentation that the agent can pull on demand
+to produce well-structured notes:
+
+| URI | Description |
+|---|---|
+| `notes://styleguide` | What Apple Notes supports: headings, lists, tables, collapsible sections, checklist limitations. |
+| `notes://html-reference` | Terse, copy-pasteable HTML snippets for every supported element. |
+| `notes://templates/meeting` | Meeting-note skeleton (metadata table + agenda + decisions + action items). |
+| `notes://templates/checklist` | TODO / checklist note. |
+| `notes://templates/longform` | Long-form reference doc with collapsible sections. |
+| `notes://templates/table` | Tabular / comparison note. |
+
+## Prompts
+
+| Name | Use it for |
+|---|---|
+| `compose_note(topic)` | Pre-flight checklist for creating a new note: tells the agent to read the styleguide + a template before calling `create_note`. |
+| `expand_note(note_id, content)` | Pre-flight checklist for `append_to_note` / `update_note`: tells the agent to fetch the existing note first and match its structure. |
+
 ## Requirements
 
 - macOS (any reasonably modern version)

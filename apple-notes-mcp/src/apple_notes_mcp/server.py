@@ -6,10 +6,76 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from . import content as _content
 from . import scripts
 from .bridge import AppleScriptError, run_osa_json
 
 mcp = FastMCP("apple-notes")
+
+
+# --------------------------------------------------------------------------- #
+# Resources — formatting reference the agent should read before authoring     #
+# --------------------------------------------------------------------------- #
+
+@mcp.resource(
+    "notes://styleguide",
+    name="Apple Notes Styleguide",
+    description="What Apple Notes supports: headings, lists, tables, "
+                "collapsible sections, checklist limitations, etc.",
+    mime_type="text/markdown",
+)
+def styleguide() -> str:
+    return _content.STYLEGUIDE
+
+
+@mcp.resource(
+    "notes://html-reference",
+    name="Apple Notes HTML Reference",
+    description="Terse, copy-pasteable HTML snippets for every supported "
+                "Apple Notes formatting element.",
+    mime_type="text/markdown",
+)
+def html_reference() -> str:
+    return _content.HTML_REFERENCE
+
+
+@mcp.resource(
+    "notes://templates/{kind}",
+    name="Apple Notes Template",
+    description="Ready-to-fill HTML templates. `kind` is one of: "
+                "meeting, checklist, longform, table.",
+    mime_type="text/markdown",
+)
+def template(kind: str) -> str:
+    if kind not in _content.TEMPLATES:
+        raise ValueError(
+            f"Unknown template '{kind}'. Available: "
+            f"{', '.join(sorted(_content.TEMPLATES))}."
+        )
+    return _content.TEMPLATES[kind]
+
+
+# --------------------------------------------------------------------------- #
+# Prompts — guide the agent when authoring or expanding a note                #
+# --------------------------------------------------------------------------- #
+
+@mcp.prompt(
+    name="compose_note",
+    description="Compose a new Apple Note. Reads the styleguide, HTML "
+                "reference and templates first, then produces a well-structured "
+                "body for `create_note`.",
+)
+def compose_note_prompt(topic: str) -> str:
+    return _content.COMPOSE_NOTE_PROMPT.format(topic=topic)
+
+
+@mcp.prompt(
+    name="expand_note",
+    description="Append to or update an existing Apple Note while preserving "
+                "its existing structure and conventions.",
+)
+def expand_note_prompt(note_id: str, content: str) -> str:  # noqa: A002
+    return _content.EXPAND_NOTE_PROMPT.format(note_id=note_id, content=content)
 
 
 @mcp.tool()
