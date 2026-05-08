@@ -133,20 +133,52 @@ def get_note(note_id: str) -> dict[str, Any]:
     return run_osa_json(scripts.GET_NOTE, inputs={"NOTES_ID": note_id})
 
 
+def _resolve_body(body: str | None, content: str | None,
+                  text: str | None, *, required: bool) -> str:
+    """Pick whichever of body/content/text the caller supplied.
+
+    `body` is the canonical name. `content` and `text` are accepted as
+    aliases because some agents reach for those instead, and a tool
+    that hard-fails on a parameter rename is a footgun.
+    """
+    provided = {k: v for k, v in (("body", body), ("content", content),
+                                  ("text", text)) if v is not None}
+    if len(provided) > 1:
+        raise ValueError(
+            f"Provide exactly one of `body`, `content`, `text` "
+            f"(got: {sorted(provided)})."
+        )
+    if not provided:
+        if required:
+            raise ValueError(
+                "Missing required body. Pass it as `body` (preferred), "
+                "`content`, or `text`."
+            )
+        return ""
+    return next(iter(provided.values()))
+
+
 @mcp.tool()
-def create_note(title: str, body: str, folder: str | None = None,
+def create_note(title: str, body: str | None = None,
+                content: str | None = None, text: str | None = None,
+                folder: str | None = None,
                 account: str | None = None) -> dict[str, Any]:
     """Create a new note.
 
     Args:
         title: Note title (also rendered as an <h1> at the top of the body).
-        body: HTML or plain text. Plain text is auto-wrapped with <br> for newlines.
+        body: HTML or plain text. Plain text is auto-wrapped with <br>
+            for newlines. **`body` is the canonical parameter name.**
+            `content` and `text` are accepted as aliases.
+        content: Alias for `body`.
+        text: Alias for `body`.
         folder: Optional target folder name. Defaults to the user's default folder.
         account: Optional account name (e.g. "iCloud") to disambiguate folders.
     """
+    body_text = _resolve_body(body, content, text, required=True)
     inputs = {
         "NOTES_TITLE": title,
-        "NOTES_BODY": body,
+        "NOTES_BODY": body_text,
         "NOTES_FOLDER": folder or "",
         "NOTES_ACCOUNT": account or "",
     }
@@ -154,41 +186,99 @@ def create_note(title: str, body: str, folder: str | None = None,
 
 
 @mcp.tool()
-def append_to_note(note_id: str, body: str) -> dict[str, Any]:
+def append_to_note(note_id: str, body: str | None = None,
+                   content: str | None = None,
+                   text: str | None = None) -> dict[str, Any]:
     """Append HTML or plain text to the end of an existing note.
 
     Non-destructive: existing content is never touched. Prefer this over
     `update_note` whenever the user is *adding* content rather than
     rewriting existing content.
+
+    `body` is the canonical parameter name. `content` and `text` are
+    accepted as aliases.
     """
-    inputs = {"NOTES_ID": note_id, "NOTES_BODY": body}
+    body_text = _resolve_body(body, content, text, required=True)
+    inputs = {"NOTES_ID": note_id, "NOTES_BODY": body_text}
     return run_osa_json(scripts.APPEND_TO_NOTE, inputs=inputs)
 
 
 @mcp.tool()
-def update_note(note_id: str, body: str, title: str | None = None) -> dict[str, Any]:
+def update_note(note_id: str, body: str | None = None,
+                content: str | None = None, text: str | None = None,
+                title: str | None = None) -> dict[str, Any]:
     """Replace the body of an existing note. **Destructive.**
 
-    The new `body` REPLACES the existing body in full. There is no undo.
+    The new body REPLACES the existing body in full. There is no undo.
+
+    **WARNING — hidden hyperlinks are unrecoverable through this bridge.**
+    Apple's AppleScript Notes interface does not expose `<a href="...">`
+    URLs in the `body` property. If a note contains any hidden link
+    (URL behind visible label text — e.g. created via the Notes app's
+    Link button), `get_note` cannot read those URLs back, and calling
+    `update_note` WILL destroy them in the live note.
+    For renaming, prefer `rename_note` (it does not touch body).
+    For additions, prefer `append_to_note` (it does not rewrite body).
 
     Before calling, you MUST:
-    1. `get_note(note_id)` and read the **`body_html`** (not `body_text` —
-       it is lossy and hides URLs inside `<a href="...">` and other
-       structure).
+    1. `get_note(note_id)` and read **`body_html`** (not `body_text` —
+       plaintext additionally drops emphasis, table/list structure).
     2. Read the resource `notes://preservation-rules`.
     3. Inventory every `<a href="...">`, `<table>`, `<ul>`, `<ol>`,
        `<b>`/`<i>`/`<u>`/`<s>` from the original `body_html`. Your new
-       `body` MUST contain all of them, with the same `href` URLs,
+       body MUST contain all of them, with the same `href` URLs,
        unless the user explicitly asked you to remove a specific item.
-    4. If you can achieve the user's goal with `append_to_note` instead,
-       do that — it cannot lose data.
+    4. If the note may contain hidden links, do not call `update_note`.
+
+    `body` is the canonical parameter name. `content` and `text` are
+    accepted as aliases. If you only want to rename, use `rename_note`
+    instead.
     """
+    body_text = _resolve_body(body, content, text, required=False)
+    if not body_text and not title:
+        raise ValueError(
+            "Nothing to update. Pass `body` to rewrite content "
+            "(or use `rename_note` for title-only changes)."
+        )
+    if not body_text:
+        raise ValueError(
+            "update_note requires a body. For title-only renames, use "
+            "`rename_note(note_id, title)` -- it does not touch body and "
+            "is safe even on notes with hidden hyperlinks."
+        )
     inputs = {
         "NOTES_ID": note_id,
-        "NOTES_BODY": body,
+        "NOTES_BODY": body_text,
         "NOTES_TITLE": title or "",
     }
     return run_osa_json(scripts.UPDATE_NOTE, inputs=inputs)
+
+
+@mcp.tool()
+def rename_note(note_id: str, title: str) -> dict[str, Any]:
+    """Rename a note **without touching its body**.
+
+    Sets only the note's `name` property. The body is not read, modified,
+    or rewritten -- which makes this the **only** rename method that is
+    safe on notes containing hidden hyperlinks (URLs behind visible
+    label text). Apple's AppleScript bridge strips `<a href>` on every
+    body write, so any tool that rewrites body would destroy those
+    links in the live note.
+
+    Caveats to know about:
+    - In modern Notes (macOS Sonoma+ / iOS 17+), the title shown AT THE
+      TOP OF THE OPEN NOTE BODY is derived from the first line of body.
+      Since we don't touch body, that on-screen title does not change.
+      The Notes sidebar / notes-list title does update because that
+      comes from `name`, which we set.
+    - If you want the body's leading title text to also change, you
+      have to do that inside the Notes app manually (which preserves
+      hyperlinks because the UI doesn't go through AppleScript).
+    """
+    return run_osa_json(scripts.RENAME_NOTE, inputs={
+        "NOTES_ID": note_id,
+        "NOTES_NEW_NAME": title,
+    })
 
 
 @mcp.tool()

@@ -282,6 +282,44 @@ emit({ id: found.id(), name: found.name(), updated: true });
 """)
 
 
+# -- rename note (no body touch) -------------------------------------------
+
+# IMPORTANT: this script ONLY sets the `name` property. It does NOT touch
+# `body`. This is the only rename approach that is safe on notes containing
+# hidden hyperlinks, because writing `body` back via AppleScript strips
+# every <a href="..."> in the live note (Apple's bridge does not expose
+# href and overwriting body destroys the live, clickable link).
+#
+# Side effect to know about: modern Notes derives the title shown at the
+# top of the open note body from the first line of body. Since we don't
+# touch body, that on-screen title does not update. The Notes sidebar /
+# notes-list title (which uses `name`) does update.
+
+RENAME_NOTE = jxa(r"""
+var wantedId = getenv('NOTES_ID');
+var newName = getenv('NOTES_NEW_NAME');
+
+if (!newName) throw new Error('new_title is required');
+
+var accounts = Notes.accounts();
+var found = null;
+outer:
+for (var i = 0; i < accounts.length; i++) {
+  var folders = accounts[i].folders();
+  for (var j = 0; j < folders.length; j++) {
+    var notes = folders[j].notes();
+    for (var k = 0; k < notes.length; k++) {
+      if (notes[k].id() === wantedId) { found = notes[k]; break outer; }
+    }
+  }
+}
+if (!found) throw new Error('Note not found: ' + wantedId);
+
+found.name = newName;
+emit({ id: found.id(), name: found.name(), renamed: true });
+""")
+
+
 # -- delete note ------------------------------------------------------------
 
 DELETE_NOTE = jxa(r"""

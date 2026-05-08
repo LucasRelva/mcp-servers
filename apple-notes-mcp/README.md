@@ -13,9 +13,24 @@ It drives the Notes app via JXA (JavaScript for Automation, Apple's official scr
 | `search_notes` | Substring search over titles + bodies. |
 | `get_note` | Full content of one note (HTML + plaintext). |
 | `create_note` | New note with title, body, optional folder/account. |
-| `append_to_note` | Append HTML / text to an existing note. |
-| `update_note` | Replace a note's body (optionally rename). |
+| `append_to_note` | Append HTML / text to an existing note (non-destructive). |
+| `update_note` | Replace a note's body. **Destructive** — see the hidden-links caveat below. |
+| `rename_note` | Change the title without touching body. **Safe on notes with hidden links.** |
 | `delete_note` | Delete a note. Requires `confirm=True`. |
+
+`create_note`, `append_to_note`, and `update_note` accept the body under any of `body` (canonical), `content`, or `text` — whichever the agent reaches for first. Passing more than one is rejected with a clear error.
+
+### The hidden-hyperlink limitation (important)
+
+Apple's AppleScript bridge **does not expose `<a href="...">` URLs**. If the user typed a hyperlink in the Notes app (URL hidden behind label text like "click here"), `get_note` won't return the URL. The live note still has the link clickable in the Notes UI, but rewriting body via AppleScript will destroy it. There is no workaround at the bridge level — Apple just doesn't expose the field.
+
+For notes that may contain hidden hyperlinks:
+
+- **Use `rename_note`** for title changes — it does not read or write body.
+- **Use `append_to_note`** to add content — it does not rewrite existing content.
+- **Do not use `update_note`** — it will silently strip every hidden link.
+
+The full decision flow is in the `notes://preservation-rules` resource.
 
 ## Resources
 

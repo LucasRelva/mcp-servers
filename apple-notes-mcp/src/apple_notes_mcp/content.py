@@ -84,8 +84,20 @@ This MCP's `create_note` tool already inserts the requested title as an
 
 ## Preservation rules (CRITICAL — read before any update)
 
-When **modifying an existing note** (`append_to_note`, `update_note`), the
-golden rule is:
+### Hard limitation: hidden hyperlinks cannot round-trip
+
+Apple's AppleScript bridge does **not** expose `<a href="...">` URLs in
+the `body` property. If the user typed a hyperlink in the Notes UI (the
+Link button — URL hidden behind a visible label like "click here"),
+`get_note` cannot read the URL back. The live note in Notes still has
+the link clickable, but writing body back via AppleScript will destroy
+it. Only `append_to_note` and `rename_note` are safe on such notes.
+
+See `notes://preservation-rules` for the full decision flow.
+
+### The body_text trap
+
+When **modifying an existing note**, the golden rule is:
 
 > **Always work from `body_html`. Never write back content derived from
 > `body_text`.**
@@ -201,11 +213,41 @@ Newlines in plain text become `<br>` (or wrap each line in its own `<div>`).
 PRESERVATION_RULES = """\
 # Apple Notes — Preservation Rules for Updates
 
-When modifying an existing note (`append_to_note`, `update_note`), follow
-these rules to avoid silently destroying content. Read this doc **before**
-producing any edited HTML.
+When modifying an existing note (`append_to_note`, `update_note`,
+`rename_note`), follow these rules to avoid silently destroying content.
+Read this doc **before** producing any edited HTML.
 
-## The single most important rule
+## Hard limitation — hidden hyperlinks cannot round-trip
+
+Apple's AppleScript Notes bridge **does not expose `<a href="...">` URLs**.
+If the user typed a hyperlink in the Notes app (e.g. via the Link button —
+URL hidden behind visible label text like "click here"), `get_note` will
+NOT return the URL. The body comes back with the link converted to plain
+underlined text (`<u>label</u>`) or just plain text.
+
+This means:
+
+- **There is no way to know via this MCP whether a note contains hidden
+  hyperlinks.** If you suspect it does (because the user mentions "the
+  doc link" or similar, or because the body contains language like
+  "click here" / "see here" / "the link" with no visible URL), you must
+  treat the note as fragile.
+- **`update_note` will destroy live hyperlinks.** Even though `get_note`
+  doesn't show them, the live note in the Notes app DOES still have
+  them clickable. Writing the body back via AppleScript overwrites the
+  live representation with the link-stripped version, killing the URLs.
+- **`append_to_note` is safe.** It only adds content at the end and
+  never touches existing content.
+- **`rename_note` is safe.** It only changes the note's `name` property
+  and never reads or writes body.
+
+If a note may contain hidden links, the only operations you may perform
+are `append_to_note` and `rename_note`. **Do not use `update_note`.**
+If the user asks for a body edit on such a note, explain the limitation
+and ask them to make the edit inside the Notes app directly (where the
+UI preserves hyperlinks).
+
+## The body_text trap
 
 **Always work from `body_html`. Never rewrite a note from `body_text`.**
 
@@ -228,26 +270,38 @@ lost.
 
 1. **Read `body_html`** from `get_note(note_id)`. Ignore `body_text` for
    editing purposes; it's only useful for human-readable summaries.
-2. **Inventory everything that must survive your edit**, in particular:
-   - Every `<a href="...">` — note both the visible label *and* the URL.
+2. **Decide if the note may contain hidden hyperlinks.** Signals that
+   it might:
+   - The user refers to "the link", "click here", "the doc", etc.
+   - body_text contains label-style phrases without nearby URLs.
+   - The note is older / authored in the Notes app rather than via this MCP.
+   If yes, **do not call `update_note`**. Use `append_to_note` (for
+   additions) or `rename_note` (for title changes), or ask the user to
+   edit inside the Notes app directly.
+3. **Inventory everything that must survive your edit**, in particular:
+   - Every `<a href="...">` (only visible if the note was authored via
+     this MCP — Apple's bridge hides UI-authored links).
    - Every `<b>`, `<i>`, `<u>`, `<s>`.
    - Every `<table>`, `<ul>`, `<ol>`, `<li>`, `<blockquote>`, `<pre>`,
      `<hr>`.
    - Existing `<h1>`/`<h2>`/`<h3>` — keep them where they are.
-3. **Make the smallest possible edit** to the HTML. Treat the existing
+4. **Make the smallest possible edit** to the HTML. Treat the existing
    body as authoritative; only the region the user asked you to change
    should differ.
-4. **Prefer `append_to_note`** for additions. It is impossible for append
+5. **Prefer `append_to_note`** for additions. It is impossible for append
    to lose existing content.
-5. **`update_note` is the dangerous one.** Use it only when you must
-   rewrite content in place. Before calling it:
-   - Compare your new `body` against the original `body_html`.
+6. **Prefer `rename_note`** for title-only changes. It does not touch
+   body and so cannot destroy hyperlinks.
+7. **`update_note` is the dangerous one.** Use it only when you must
+   rewrite content in place AND you are confident the note contains no
+   hidden hyperlinks. Before calling it:
+   - Compare your new body against the original `body_html`.
    - Verify every `<a href="…">` from the original appears (with the same
      URL!) in your output, unless the user explicitly told you to remove
      a specific link.
    - Verify every `<table>`, `<ul>`, `<ol>` is present.
-   - If anything is missing and the user didn't ask you to remove it,
-     fix the rewrite or stop and ask the user.
+   - If anything is missing and the user didn't ask to remove it, fix
+     the rewrite or stop and ask the user.
 
 ## When in doubt
 
