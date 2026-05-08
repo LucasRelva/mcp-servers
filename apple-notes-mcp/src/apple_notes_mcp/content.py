@@ -76,11 +76,50 @@ Any `<h2>` (Heading) creates a collapsible section: everything between this
 `<h2>` and the next `<h2>` collapses under it. Use this aggressively for
 long-form notes.
 
-## Title handling
+## Title handling — the title IS the first line of body
 
-The Notes app derives the visible note title from the first line of content.
-This MCP's `create_note` tool already inserts the requested title as an
-`<h1>` at the top of the body, so don't add another `<h1>` yourself.
+In Apple Notes the title is not a separate field: it is literally the
+**first line of `body`**, rendered bold/large by the editor and exposed
+to AppleScript as the `name` property (auto-derived). Every body write
+re-derives `name` from the new first line — there is no way around it.
+
+This MCP reflects that model:
+
+- **`create_note(title, body)`** — prepends `<div>{title}</div>` as the
+  first line of body. Your `body` should be the **content only**, with
+  no title line. Do NOT include `<h1>title</h1>` or `<div>title</div>`
+  yourself; the MCP adds it.
+- **`update_note(body, title=…)`**:
+  - **With `title=…`**: same as create — your `body` is content only;
+    the MCP prepends `<div>{title}</div>`. This effectively renames the
+    note in addition to rewriting the body.
+  - **Without `title=`**: the MCP writes your `body` verbatim. **Your
+    body MUST start with a title line** (`<div>{title text}</div>` is
+    the canonical form), or the note's title and `name` will silently
+    change to whatever the new first line of content is. The simplest
+    way to do this is to read `body_html` first and keep the existing
+    title line at the top, replacing only the content below it.
+- **`rename_note(title)`** — sets `n.name` only, body is not touched.
+  This is the **only** rename path that is safe on notes containing
+  hidden hyperlinks, but it has a caveat: in modern Notes the title
+  shown at the **top of the open note body** is derived from body's
+  first line (not from `name`), so that on-screen title will not
+  update. The Notes sidebar / list does update because it uses `name`.
+
+### Old notes with a duplicated title
+
+Notes created with earlier versions of this MCP have a duplicated
+title in body that looks like:
+
+```
+<div>{title}</div>
+<div><b><span style="font-size: 24px">{title}</span></b></div>
+<div>... content ...</div>
+```
+
+When you `update_note` such a note, **collapse the duplicate**: keep
+exactly one of those leading title lines (preferably the first
+`<div>{title}</div>`) and drop the other.
 
 ## Preservation rules (CRITICAL — read before any update)
 
@@ -467,8 +506,10 @@ When composing the note:
    short and unstructured, prefer the long-form template with at most one or
    two `<h2>` sections.
 2. **Use semantic structure** — `<h2>` for collapsible sections, `<ul>`/`<ol>`
-   for lists, `<table>` for tabular data. Do NOT add a second `<h1>`; the
-   `create_note` tool already inserts the title as `<h1>` at the top.
+   for lists, `<table>` for tabular data. **Do NOT include the note title
+   in `body`** (no `<h1>title</h1>`, no leading `<div>title</div>`). The
+   `create_note` tool prepends the title as the first line of body
+   automatically; including it again produces a duplicated title.
 3. **Escape user content**: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`. Replace
    newlines in plain text with `<br>` or wrap each line in `<div>`.
 4. **Keep it scannable** — short paragraphs, lists over walls of text, tables
@@ -541,8 +582,16 @@ so the additions match what Notes supports.
   item.
 - **Match existing conventions** in the note (heading style, list style,
   metadata-table format, `☐`/`☑` bullets, etc.).
-- **Don't duplicate the title.** The note already has its `<h1>` from
-  creation — don't add another.
+- **Title handling.** The title is the first line of body in Apple
+  Notes. Two ways to use `update_note`:
+  1. Pass `title="…"` and `body=<content only, no title line>`. The
+     MCP prepends `<div>{title}</div>` for you.
+  2. Pass `body=` containing the title as the first line yourself.
+     The MCP writes your body verbatim.
+  Whichever you choose, never end up with two title lines in a row.
+  If `body_html` from `get_note` starts with a duplicated title (older
+  notes look like `<div>{title}</div><div><b><span ...>{title}</span></b></div>`),
+  collapse the duplicate to a single line in your rewrite.
 - **Escape user-supplied text**: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`.
 
 ## Step 5 — self-check before calling update_note

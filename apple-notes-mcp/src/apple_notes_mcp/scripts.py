@@ -177,17 +177,21 @@ var accountName = getenv('NOTES_ACCOUNT');// optional
 
 // Notes uses HTML for the body; if the user passed plain text we wrap it.
 function looksLikeHtml(s) { return /<\w+[^>]*>/.test(s); }
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 var html = looksLikeHtml(body)
   ? body
-  : '<div>' + body.replace(/&/g,'&amp;').replace(/</g,'&lt;')
-                  .replace(/>/g,'&gt;').replace(/\n/g,'<br>') + '</div>';
+  : '<div>' + escapeHtml(body).replace(/\n/g,'<br>') + '</div>';
 
-// Notes prepends the first line as the title automatically; we add the title
-// as an <h1> so the resulting note has the requested name.
-var fullBody = '<h1>' + title.replace(/&/g,'&amp;').replace(/</g,'&lt;')
-                              .replace(/>/g,'&gt;') + '</h1>' + html;
-
-var props = { name: title, body: fullBody };
+// Apple Notes derives the visible title from the FIRST LINE of body and
+// also stores it as the AppleScript `name` property automatically. We
+// prepend exactly one `<div>{title}</div>` so the new note has a single
+// clean title that matches both the sidebar/list view and the editor
+// top. Setting `name` explicitly is not needed and would not survive
+// any later body write.
+var fullBody = '<div>' + escapeHtml(title) + '</div>' + html;
+var props = { body: fullBody };
 var newNote;
 
 if (folderName) {
@@ -273,9 +277,16 @@ for (var i = 0; i < accounts.length; i++) {
 }
 if (!found) throw new Error('Note not found: ' + wantedId);
 
-var titleToUse = newTitle || found.name();
-var fullBody = '<h1>' + titleToUse.replace(/&/g,'&amp;').replace(/</g,'&lt;')
-                                   .replace(/>/g,'&gt;') + '</h1>' + html;
+// Title model: the title is the FIRST LINE of body. If the caller
+// passed an explicit `title`, we prepend it as a fresh title line and
+// the agent's `body` should NOT include a title line. If `title` is
+// empty, we trust the agent's body as-is (the agent is expected to
+// preserve the existing title line when appropriate; see the styleguide
+// and notes://preservation-rules).
+var fullBody = newTitle
+  ? ('<div>' + newTitle.replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                       .replace(/>/g,'&gt;') + '</div>' + html)
+  : html;
 found.body = fullBody;
 
 emit({ id: found.id(), name: found.name(), updated: true });
