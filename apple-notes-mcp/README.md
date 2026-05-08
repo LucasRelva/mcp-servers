@@ -26,6 +26,7 @@ to produce well-structured notes:
 |---|---|
 | `notes://styleguide` | What Apple Notes supports: headings, lists, tables, collapsible sections, checklist limitations. |
 | `notes://html-reference` | Terse, copy-pasteable HTML snippets for every supported element. |
+| `notes://preservation-rules` | **Critical** rules for `append_to_note` / `update_note`: always work from `body_html`, never `body_text`; preserve every link/table/list/emphasis tag. |
 | `notes://templates/meeting` | Meeting-note skeleton (metadata table + agenda + decisions + action items). |
 | `notes://templates/checklist` | TODO / checklist note. |
 | `notes://templates/longform` | Long-form reference doc with collapsible sections. |

@@ -40,6 +40,18 @@ def html_reference() -> str:
 
 
 @mcp.resource(
+    "notes://preservation-rules",
+    name="Apple Notes Preservation Rules",
+    description="Critical rules to follow before any append_to_note or "
+                "update_note call so you don't silently destroy links, "
+                "tables, emphasis, or list structure.",
+    mime_type="text/markdown",
+)
+def preservation_rules() -> str:
+    return _content.PRESERVATION_RULES
+
+
+@mcp.resource(
     "notes://templates/{kind}",
     name="Apple Notes Template",
     description="Ready-to-fill HTML templates. `kind` is one of: "
@@ -111,6 +123,12 @@ def search_notes(query: str, limit: int = 25) -> list[dict[str, Any]]:
 def get_note(note_id: str) -> dict[str, Any]:
     """Fetch a note's full content by id (use `list_notes` / `search_notes` to
     get ids). Returns both `body_html` (Notes' native format) and `body_text`.
+
+    IMPORTANT: When you intend to **modify** the note (`append_to_note` or
+    `update_note`), always work from `body_html`. `body_text` is a lossy
+    projection — it hides URLs inside `<a href="...">`, drops table/list
+    structure, and discards inline emphasis. Rewriting from `body_text`
+    will silently delete this content. See `notes://preservation-rules`.
     """
     return run_osa_json(scripts.GET_NOTE, inputs={"NOTES_ID": note_id})
 
@@ -137,14 +155,34 @@ def create_note(title: str, body: str, folder: str | None = None,
 
 @mcp.tool()
 def append_to_note(note_id: str, body: str) -> dict[str, Any]:
-    """Append HTML or plain text to the end of an existing note."""
+    """Append HTML or plain text to the end of an existing note.
+
+    Non-destructive: existing content is never touched. Prefer this over
+    `update_note` whenever the user is *adding* content rather than
+    rewriting existing content.
+    """
     inputs = {"NOTES_ID": note_id, "NOTES_BODY": body}
     return run_osa_json(scripts.APPEND_TO_NOTE, inputs=inputs)
 
 
 @mcp.tool()
 def update_note(note_id: str, body: str, title: str | None = None) -> dict[str, Any]:
-    """Replace the body of an existing note. Optionally rename it."""
+    """Replace the body of an existing note. **Destructive.**
+
+    The new `body` REPLACES the existing body in full. There is no undo.
+
+    Before calling, you MUST:
+    1. `get_note(note_id)` and read the **`body_html`** (not `body_text` —
+       it is lossy and hides URLs inside `<a href="...">` and other
+       structure).
+    2. Read the resource `notes://preservation-rules`.
+    3. Inventory every `<a href="...">`, `<table>`, `<ul>`, `<ol>`,
+       `<b>`/`<i>`/`<u>`/`<s>` from the original `body_html`. Your new
+       `body` MUST contain all of them, with the same `href` URLs,
+       unless the user explicitly asked you to remove a specific item.
+    4. If you can achieve the user's goal with `append_to_note` instead,
+       do that — it cannot lose data.
+    """
     inputs = {
         "NOTES_ID": note_id,
         "NOTES_BODY": body,

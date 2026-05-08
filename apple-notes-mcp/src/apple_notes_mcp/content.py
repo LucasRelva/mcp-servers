@@ -81,6 +81,49 @@ long-form notes.
 The Notes app derives the visible note title from the first line of content.
 This MCP's `create_note` tool already inserts the requested title as an
 `<h1>` at the top of the body, so don't add another `<h1>` yourself.
+
+## Preservation rules (CRITICAL — read before any update)
+
+When **modifying an existing note** (`append_to_note`, `update_note`), the
+golden rule is:
+
+> **Always work from `body_html`. Never write back content derived from
+> `body_text`.**
+
+`body_text` is a lossy projection of the note. Several elements are
+invisible there but visible in the Notes app, and re-writing from plaintext
+silently destroys them:
+
+- `<a href="...">visible label</a>` — the URL is hidden behind the label
+  text. In `body_text` you only see `visible label`. If you regenerate the
+  body from plaintext, **the link is gone**.
+- `<b>`, `<i>`, `<u>`, `<s>` — emphasis is invisible in plaintext.
+- `<table>` structure — collapses to a flat run of cell text without
+  borders, headers, or rows.
+- Bullet/numbered list nesting — nesting depth disappears in plaintext.
+- Blockquotes, horizontal rules, monospaced blocks — formatting markers
+  are stripped.
+
+### Required workflow for ANY update
+
+1. Call `get_note(note_id)` and read **`body_html`** (not `body_text`).
+2. Identify everything that must survive your edit. Pay special attention
+   to:
+   - Every `<a href="...">` — the URL inside `href=` must be preserved
+     verbatim, even if you change the surrounding text.
+   - Every `<table>`, `<ul>`, `<ol>`, `<blockquote>`, `<pre>`.
+   - Inline emphasis (`<b>`, `<i>`, `<u>`, `<s>`).
+3. Make a **minimal, targeted edit** to the HTML — change the smallest
+   region needed and leave the rest byte-for-byte identical.
+4. Prefer `append_to_note` over `update_note` when you're only adding
+   content. Append is non-destructive by definition.
+5. When `update_note` is unavoidable, the new `body` must be a superset
+   of what was there: every link, table, list and emphasis tag from the
+   original must reappear in the rewrite, unless the user explicitly
+   asked you to remove it.
+
+If you are unsure whether your rewrite preserves everything, **stop and
+ask the user** rather than risk losing data.
 """
 
 # --------------------------------------------------------------------------- #
@@ -150,6 +193,69 @@ Always escape `&`, `<`, `>` in user-provided text:
 
 Newlines in plain text become `<br>` (or wrap each line in its own `<div>`).
 """
+
+# --------------------------------------------------------------------------- #
+# Preservation rules — focused doc the expand prompt loads up front           #
+# --------------------------------------------------------------------------- #
+
+PRESERVATION_RULES = """\
+# Apple Notes — Preservation Rules for Updates
+
+When modifying an existing note (`append_to_note`, `update_note`), follow
+these rules to avoid silently destroying content. Read this doc **before**
+producing any edited HTML.
+
+## The single most important rule
+
+**Always work from `body_html`. Never rewrite a note from `body_text`.**
+
+`body_text` is a lossy projection. The following all look identical to
+`body_text` but are very different in the actual note:
+
+| Looks the same in body_text | But the HTML differs |
+|---|---|
+| `Click here for the docs` | `<a href="https://example.com">Click here for the docs</a>` |
+| `Total: 42` | `<b>Total:</b> 42` |
+| `A Cell — B Cell` | `<table>…<tr><td>A Cell</td><td>B Cell</td></tr>…</table>` |
+| `One Two Three` | `<ul><li>One</li><li><ul><li>Two</li><li>Three</li></ul></li></ul>` |
+
+If you regenerate the body from `body_text`, every link URL, every emphasis
+tag, every table cell boundary, every list nesting level **is gone**. The
+Notes app will happily save the dumbed-down version and the user's data is
+lost.
+
+## Required workflow
+
+1. **Read `body_html`** from `get_note(note_id)`. Ignore `body_text` for
+   editing purposes; it's only useful for human-readable summaries.
+2. **Inventory everything that must survive your edit**, in particular:
+   - Every `<a href="...">` — note both the visible label *and* the URL.
+   - Every `<b>`, `<i>`, `<u>`, `<s>`.
+   - Every `<table>`, `<ul>`, `<ol>`, `<li>`, `<blockquote>`, `<pre>`,
+     `<hr>`.
+   - Existing `<h1>`/`<h2>`/`<h3>` — keep them where they are.
+3. **Make the smallest possible edit** to the HTML. Treat the existing
+   body as authoritative; only the region the user asked you to change
+   should differ.
+4. **Prefer `append_to_note`** for additions. It is impossible for append
+   to lose existing content.
+5. **`update_note` is the dangerous one.** Use it only when you must
+   rewrite content in place. Before calling it:
+   - Compare your new `body` against the original `body_html`.
+   - Verify every `<a href="…">` from the original appears (with the same
+     URL!) in your output, unless the user explicitly told you to remove
+     a specific link.
+   - Verify every `<table>`, `<ul>`, `<ol>` is present.
+   - If anything is missing and the user didn't ask you to remove it,
+     fix the rewrite or stop and ask the user.
+
+## When in doubt
+
+Stop and ask. Apple Notes does not have undo across an MCP write — once
+you call `update_note`, the previous body is gone. A clarifying question
+to the user is far cheaper than data loss.
+"""
+
 
 # --------------------------------------------------------------------------- #
 # Templates — concrete, ready-to-fill examples                                #
@@ -327,37 +433,79 @@ must be valid HTML that follows the styleguide.
 """
 
 EXPAND_NOTE_PROMPT = """\
-You are about to expand or update an existing Apple Note (via `append_to_note`
-or `update_note`).
+You are about to expand or update an existing Apple Note (via
+`append_to_note` or `update_note`).
 
-**Before writing anything, do the following in order:**
+## Step 0 — read the rules that prevent data loss
 
-1. Call `get_note(note_id="{note_id}")` to read the current `body_html`.
-2. Read `notes://styleguide` and `notes://html-reference` so you stay within
-   what the Notes app supports.
-3. Inspect the existing structure of the note:
-   - Which `<h2>` / `<h3>` sections exist?
-   - Is it predominantly a checklist, a meeting log, a reference doc, a table?
-   - What inline conventions are in use (e.g. `☐` bullets, bold field labels)?
+Before doing ANYTHING else, load and read this resource end-to-end:
 
-When you write the new content:
+- `notes://preservation-rules`
 
-- **Match the existing structure.** If the note uses `<h2>` per section, add
-  your content under the right `<h2>` (or create a new `<h2>` if it's a
-  genuinely new section).
-- **Match the existing conventions.** If the note uses `☐`/`☑` bullets for
-  TODOs, do the same. If it uses a metadata table, add new rows there rather
-  than introducing a new format.
+It explains why you must work from `body_html` (never `body_text`) and
+exactly what to preserve. Do not skip it. A previous run of this prompt
+silently deleted hyperlinks because they were "hidden behind" their
+visible label text — that must not happen again.
+
+## Step 1 — fetch the current state of the note
+
+Call `get_note(note_id="{note_id}")` and read **`body_html`**. Ignore
+`body_text` for editing; it's lossy and will lead you astray.
+
+## Step 2 — inventory what must survive
+
+From `body_html`, list every:
+
+- `<a href="…">` — record each URL and the label so you can verify they
+  reappear unchanged in your output.
+- `<table>` — note its row/column shape.
+- `<ul>` / `<ol>` — note nesting depth and any `☐`/`☑` conventions.
+- `<b>`, `<i>`, `<u>`, `<s>` — note where emphasis lives.
+- `<h1>`, `<h2>`, `<h3>` — note the section structure.
+
+You will need to confirm that every item in this inventory is present in
+your output before you call `update_note`.
+
+## Step 3 — read the styleguide if you'll add new content
+
+If your edit introduces *new* structure (a new section, a new table,
+etc.), also load:
+
+- `notes://styleguide`
+- `notes://html-reference`
+
+so the additions match what Notes supports.
+
+## Step 4 — produce the edit
+
+- **Strongly prefer `append_to_note`.** It cannot delete existing content.
+  Use it whenever the user is adding to the note rather than rewriting it.
+- **`update_note` is the dangerous tool.** Only use it when you must
+  rewrite content in place. Your new `body` MUST contain every `<a href>`,
+  every `<table>`, every `<ul>`/`<ol>`, every emphasis tag from the
+  original, unless the user explicitly asked you to remove a specific
+  item.
+- **Match existing conventions** in the note (heading style, list style,
+  metadata-table format, `☐`/`☑` bullets, etc.).
 - **Don't duplicate the title.** The note already has its `<h1>` from
-  creation; don't add another.
-- **Prefer `append_to_note`** when adding content to the end (it's
-  non-destructive). Use `update_note` only when you must rewrite the whole
-  body — and in that case preserve every existing section unless the user
-  asked you to remove it.
-- **Escape special characters** in any user-supplied text: `&` → `&amp;`,
-  `<` → `&lt;`, `>` → `&gt;`.
+  creation — don't add another.
+- **Escape user-supplied text**: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`.
 
-Content the user wants to add / change:
+## Step 5 — self-check before calling update_note
+
+If you're using `update_note`, compare your output against the inventory
+from Step 2:
+
+- Every URL from Step 2 still appears verbatim inside an `<a href="…">`?
+- Every table is intact?
+- Every list (and its nesting) is intact?
+- Every emphasis tag is intact?
+
+If anything in the inventory is missing and the user did NOT ask to
+remove it, do not call `update_note`. Either fix the rewrite, or stop
+and ask the user for clarification.
+
+## Content the user wants to add / change
 
 {content}
 """
