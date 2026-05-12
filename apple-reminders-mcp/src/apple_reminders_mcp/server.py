@@ -13,6 +13,43 @@ mcp = FastMCP("apple-reminders")
 
 Priority = Literal["none", "high", "medium", "low"]
 
+MAX_LIMIT = 1000
+
+
+def _clamp_limit(limit: int) -> int:
+    """Clamp a user-supplied `limit` to a sane positive range.
+
+    Callers can pass any int; we coerce to at least 1 and at most `MAX_LIMIT`
+    so the osascript layer never receives a zero/negative value (which would
+    silently return an empty list) or an unbounded value (which would drag
+    the entire Reminders database over Apple Events).
+    """
+    if limit < 1:
+        return 1
+    if limit > MAX_LIMIT:
+        return MAX_LIMIT
+    return limit
+
+
+def _flag_env(value: bool) -> str:
+    """Map a Python bool to the `"1"`/`""` toggle the osascript layer expects."""
+    return "1" if value else ""
+
+
+def _tristate_flag_env(value: bool | None) -> str:
+    """Map an optional Python bool to the `"1"`/`"0"`/`""` tri-state the osascript layer expects.
+
+    - `None` → `""`  (leave the field untouched on the reminder)
+    - `True` → `"1"` (set the flag)
+    - `False` → `"0"` (clear the flag)
+
+    Pulled out of `update_reminder` to flatten the nested ternary that
+    SonarQube python:S3358 flagged.
+    """
+    if value is None:
+        return ""
+    return "1" if value else "0"
+
 
 @mcp.tool()
 def list_lists() -> list[dict[str, Any]]:
@@ -33,25 +70,34 @@ def list_reminders(
         list_name: Optional list to filter by (e.g. "Groceries").
         include_completed: If True, include completed reminders alongside open ones.
         only_completed: If True, return only completed reminders (overrides include_completed).
-        limit: Max results to return.
+        limit: Max results to return (1..MAX_LIMIT; out-of-range values are clamped).
     """
     inputs = {
         "REM_LIST": list_name or "",
-        "REM_INCLUDE_COMPLETED": "1" if include_completed else "",
-        "REM_ONLY_COMPLETED": "1" if only_completed else "",
-        "REM_LIMIT": str(limit),
+        "REM_INCLUDE_COMPLETED": _flag_env(include_completed),
+        "REM_ONLY_COMPLETED": _flag_env(only_completed),
+        "REM_LIMIT": str(_clamp_limit(limit)),
     }
     return run_osa_json(scripts.LIST_REMINDERS, inputs=inputs) or []
 
 
 @mcp.tool()
-def search_reminders(query: str, include_completed: bool = False,
-                     limit: int = 50) -> list[dict[str, Any]]:
-    """Substring search across reminder names and notes (case-insensitive)."""
+def search_reminders(
+    query: str,
+    include_completed: bool = False,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Substring search across reminder names and notes (case-insensitive).
+
+    Args:
+        query: Substring to search for.
+        include_completed: If True, also match completed reminders.
+        limit: Max results to return (1..MAX_LIMIT; out-of-range values are clamped).
+    """
     inputs = {
         "REM_QUERY": query,
-        "REM_INCLUDE_COMPLETED": "1" if include_completed else "",
-        "REM_LIMIT": str(limit),
+        "REM_INCLUDE_COMPLETED": _flag_env(include_completed),
+        "REM_LIMIT": str(_clamp_limit(limit)),
     }
     return run_osa_json(scripts.SEARCH_REMINDERS, inputs=inputs) or []
 
@@ -137,17 +183,20 @@ def update_reminder(
         "REM_DUE_DATE": due_date or "",
         "REM_REMIND_AT": remind_at or "",
         "REM_PRIORITY": priority or "",
-        "REM_FLAGGED": "" if flagged is None else ("1" if flagged else "0"),
-        "REM_CLEAR_BODY": "1" if clear_body else "",
-        "REM_CLEAR_DUE_DATE": "1" if clear_due_date else "",
-        "REM_CLEAR_REMIND_AT": "1" if clear_remind_at else "",
+        "REM_FLAGGED": _tristate_flag_env(flagged),
+        "REM_CLEAR_BODY": _flag_env(clear_body),
+        "REM_CLEAR_DUE_DATE": _flag_env(clear_due_date),
+        "REM_CLEAR_REMIND_AT": _flag_env(clear_remind_at),
     }
     return run_osa_json(scripts.UPDATE_REMINDER, inputs=inputs)
 
 
 @mcp.tool()
-def complete_reminder(reminder_id: str, completed: bool = True,
-                      list_name: str | None = None) -> dict[str, Any]:
+def complete_reminder(
+    reminder_id: str,
+    completed: bool = True,
+    list_name: str | None = None,
+) -> dict[str, Any]:
     """Mark a reminder complete (or set `completed=False` to reopen it).
 
     Pass `list_name` for a much faster lookup when you know which list the
@@ -162,8 +211,11 @@ def complete_reminder(reminder_id: str, completed: bool = True,
 
 
 @mcp.tool()
-def delete_reminder(reminder_id: str, confirm: bool = False,
-                    list_name: str | None = None) -> dict[str, Any]:
+def delete_reminder(
+    reminder_id: str,
+    confirm: bool = False,
+    list_name: str | None = None,
+) -> dict[str, Any]:
     """Permanently delete a reminder. Pass `confirm=True` to actually delete.
 
     Pass `list_name` to skip list enumeration for a faster lookup.
@@ -179,8 +231,11 @@ def delete_reminder(reminder_id: str, confirm: bool = False,
 
 
 @mcp.tool()
-def move_reminder(reminder_id: str, target_list: str,
-                  list_name: str | None = None) -> dict[str, Any]:
+def move_reminder(
+    reminder_id: str,
+    target_list: str,
+    list_name: str | None = None,
+) -> dict[str, Any]:
     """Move a reminder to a different list.
 
     Apple's `move` AppleScript verb is unreliable for Reminders, so this

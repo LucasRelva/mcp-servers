@@ -20,7 +20,11 @@ stripped: rely on semantic tags, not inline styles.
 
 ## Paragraph styles
 
-- **Title** — large display heading at the top. Use `<h1>` (one per note).
+- **Title** — the first line of body is rendered as the title. `create_note`
+  automatically prepends `<div>{title}</div>` so do *not* include a title
+  line in your `body`. The title is also exposed to AppleScript as the
+  note's `name`. See "Title handling — the title IS the first line of body"
+  below for the full mental model.
 - **Heading** — section header, *also* renders the section as collapsible in
   modern Notes. Use `<h2>`.
 - **Subheading** — sub-section. Use `<h3>`.

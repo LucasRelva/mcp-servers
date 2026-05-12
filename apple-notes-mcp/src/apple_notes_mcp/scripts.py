@@ -108,9 +108,13 @@ if (!query) { emit([]); } else {
       for (var k = 0; k < notes.length; k++) {
         var n = notes[k];
         var name = (n.name() || '').toLowerCase();
-        var body = '';
-        try { body = (n.plaintext() || '').toLowerCase(); }
-        catch (e) { /* locked note */ }
+        // Read body once with the lock guard, then reuse the unlowercased
+        // form for the snippet. Touching `n.plaintext()` a second time outside
+        // the try/catch on a locked note would throw and abort the whole search.
+        var bodyRaw = '';
+        try { bodyRaw = n.plaintext() || ''; }
+        catch (e) { continue; /* locked note: skip silently */ }
+        var body = bodyRaw.toLowerCase();
         if (name.indexOf(query) !== -1 || body.indexOf(query) !== -1) {
           out.push({
             id: n.id(),
@@ -118,7 +122,7 @@ if (!query) { emit([]); } else {
             folder: folder.name(),
             account: accounts[i].name(),
             modification_date: n.modificationDate().toISOString(),
-            snippet: (n.plaintext() || '').slice(0, 200),
+            snippet: bodyRaw.slice(0, 200),
           });
           if (out.length >= limit) break outer;
         }
@@ -310,7 +314,7 @@ RENAME_NOTE = jxa(r"""
 var wantedId = getenv('NOTES_ID');
 var newName = getenv('NOTES_NEW_NAME');
 
-if (!newName) throw new Error('new_title is required');
+if (!newName) throw new Error('title (NOTES_NEW_NAME) is required');
 
 var accounts = Notes.accounts();
 var found = null;

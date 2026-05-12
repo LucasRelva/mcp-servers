@@ -334,7 +334,16 @@ var wantedId = getenv('REM_ID');
 var listHint = getenv('REM_LIST_HINT');
 var hit = findReminderById(wantedId, listHint);
 if (!hit) throw new Error('Reminder not found: ' + wantedId);
-var meta = { id: hit.reminder.id(), name: hit.reminder.name() };
+// Capture the slim shape BEFORE deleting (we can't read off a deleted
+// reference). This matches the {id, name, list, completed} contract the
+// other write tools return, plus `deleted: true` so callers can branch on
+// it.
+var meta = {
+  id: hit.reminder.id(),
+  name: hit.reminder.name(),
+  list: hit.list.name(),
+  completed: hit.reminder.completed(),
+};
 Reminders.delete(hit.reminder);
 emit(Object.assign(meta, { deleted: true }));
 """)

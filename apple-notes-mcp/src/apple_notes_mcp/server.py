@@ -166,7 +166,12 @@ def create_note(title: str, body: str | None = None,
     """Create a new note.
 
     Args:
-        title: Note title (also rendered as an <h1> at the top of the body).
+        title: Note title. Internally `create_note` prepends a single
+            `<div>{title}</div>` as the first line of the body — that
+            line becomes the note's title in the Notes UI (Notes derives
+            the title from the first line of body; see
+            `notes://styleguide`). Do not pre-include a title line in
+            `body`.
         body: HTML or plain text. Plain text is auto-wrapped with <br>
             for newlines. **`body` is the canonical parameter name.**
             `content` and `text` are accepted as aliases.
