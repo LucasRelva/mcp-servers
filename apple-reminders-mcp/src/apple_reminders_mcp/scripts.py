@@ -112,18 +112,18 @@ var includeDone  = getenv('REM_INCLUDE_COMPLETED') === '1';
 var onlyDone     = getenv('REM_ONLY_COMPLETED') === '1';
 var limit        = parseInt(getenv('REM_LIMIT') || '100', 10);
 
-// Push the completion filter to Reminders.app via `whose`. Without this
-// we'd pull every completed reminder (potentially thousands, going back
-// years) over Apple Events and filter in JS. With it, the app does the
-// filter and only sends matches.
-function reminderRefs(list) {
-  if (onlyDone)         return list.reminders.whose({ completed: true });
-  if (!includeDone)     return list.reminders.whose({ completed: false });
-  return list.reminders;
+function wanted(done) {
+  if (onlyDone)    return done;
+  if (includeDone) return true;
+  return !done;
 }
 
-// Pull each property as a bulk array (one Apple Event per call) instead of
-// touching each reminder individually.
+// Pull each property as one bulk array (a single Apple Event per call). We
+// read the plain `reminders` collection rather than a `whose(...)` specifier:
+// every property access on a `whose` specifier re-runs the filter app-side,
+// so the 11 reads below would re-evaluate it 11x (~50s for a handful of
+// reminders). Reading the plain collection and filtering completion in JS is
+// ~5x faster and stays well under the 90s osascript timeout.
 function bulkFetch(rs) {
   return {
     ids:   rs.id(),
@@ -145,12 +145,12 @@ var lists = listFilter
   ? Reminders.lists.whose({ name: listFilter })()
   : Reminders.lists();
 
-outer:
 for (var i = 0; i < lists.length; i++) {
   var l = lists[i];
   var listName = l.name();
-  var b = bulkFetch(reminderRefs(l));
+  var b = bulkFetch(l.reminders);
   for (var j = 0; j < b.ids.length; j++) {
+    if (!wanted(b.completed[j])) continue;
     out.push({
       id: b.ids[j],
       name: b.names[j],
@@ -165,7 +165,6 @@ for (var i = 0; i < lists.length; i++) {
       creation_date: isoOrNull(b.creationDates[j]),
       modification_date: isoOrNull(b.modificationDates[j]),
     });
-    if (out.length >= limit) break outer;
   }
 }
 
@@ -177,6 +176,7 @@ out.sort(function(a, b) {
   if (ad !== bd) return ad < bd ? -1 : 1;
   return (b.modification_date || '').localeCompare(a.modification_date || '');
 });
+if (out.length > limit) out.length = limit;
 emit(out);
 """)
 
@@ -195,11 +195,10 @@ if (!query) { emit([]); } else {
   for (var i = 0; i < lists.length; i++) {
     var l = lists[i];
     var listName = l.name();
-    // Server-side filter: only iterate non-completed reminders unless
-    // includeDone, and skip absurd O(N) scans of years of completed work.
-    var rs = includeDone
-      ? l.reminders
-      : l.reminders.whose({ completed: false });
+    // Bulk-read the plain collection (one Apple Event per property) and
+    // filter in JS. Reading off a `whose(...)` specifier re-runs the filter
+    // on every property access, which made this ~5x slower (see LIST_REMINDERS).
+    var rs = l.reminders;
     var ids = rs.id();
     var names = rs.name();
     var bodies = rs.body();
@@ -212,6 +211,7 @@ if (!query) { emit([]); } else {
     var compDates = rs.completionDate();
     var creDates = rs.creationDate();
     for (var j = 0; j < ids.length; j++) {
+      if (!includeDone && completed[j]) continue;
       var nm = (names[j] || '').toLowerCase();
       var bd = (bodies[j] || '').toLowerCase();
       if (nm.indexOf(query) !== -1 || bd.indexOf(query) !== -1) {

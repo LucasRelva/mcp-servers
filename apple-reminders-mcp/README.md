@@ -25,9 +25,10 @@ Apple's `osascript` ↔ Reminders.app bridge is intrinsically slow (every
 property read/write is a round-trip and Reminders syncs with iCloud
 synchronously). The server already does what it can:
 
-- `list_reminders` / `search_reminders` push the completion filter into
-  the app via `whose({completed: false})`, so they don't drag thousands
-  of years-old completed items over Apple Events.
+- `list_reminders` / `search_reminders` read each property once as a bulk
+  array off the plain `reminders` collection and filter completion in JS.
+  Reading off a `whose({completed: false})` specifier instead re-runs the
+  filter on every property access — ~5x slower (it was timing out at 90s).
 - Write tools (`create`, `update`, `complete`, `move`, `delete`) return
   a slim `{id, name, list, completed}` object instead of re-reading every
   field. Call `get_reminder` if you need the full record.
